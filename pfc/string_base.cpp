@@ -965,6 +965,7 @@ double parse_timecode(const char * in) {
 }
 
 format_time_ex::format_time_ex(double p_seconds,unsigned p_extra) {
+	if (p_seconds < 0) {m_buffer << "-"; p_seconds = -p_seconds;}
 	t_uint64 pow10 = pow10_helper(p_extra);
 	t_uint64 ticks = pfc::rint64(pow10 * p_seconds);
 
@@ -1028,7 +1029,7 @@ int stringCompareCaseInsensitive(const char * s1, const char * s2) {
 	}
 }
 
-format_file_size_short::format_file_size_short(t_uint64 size) {
+void format_file_size_short::format(t_uint64 size) {
 	t_uint64 scale = 1;
 	const char * unit = "B";
 	const char * const unitTable[] = {"B","KB","MB","GB","TB"};

@@ -269,12 +269,12 @@ namespace foobar2000_io
 
 		//! Optional, called by owner thread before sleeping.
 		//! @param p_abort abort_callback object signaling user aborting the operation.
-		virtual void on_idle(abort_callback & p_abort) {}
+		virtual void on_idle(abort_callback & p_abort) {(void)p_abort;}
 
 		//! Retrieves last modification time of the file.
 		//! @param p_abort abort_callback object signaling user aborting the operation.
 		//! @returns Last modification time o fthe file; filetimestamp_invalid if N/A.
-		virtual t_filetimestamp get_timestamp(abort_callback & p_abort) {return filetimestamp_invalid;}
+		virtual t_filetimestamp get_timestamp(abort_callback & p_abort) {(void)p_abort;return filetimestamp_invalid;}
 
 		//! Resets non-seekable stream, or seeks to zero on seekable file.
 		//! @param p_abort abort_callback object signaling user aborting the operation.
@@ -318,6 +318,9 @@ namespace foobar2000_io
 		static void g_transfer_object(stream_reader * src,stream_writer * dst,t_filesize bytes,abort_callback & p_abort);
 		//! Helper; transfers entire file content from one file to another, erasing previous content.
 		static void g_transfer_file(const service_ptr_t<file> & p_from,const service_ptr_t<file> & p_to,abort_callback & p_abort);
+		//! Helper; transfers file modification times from one file to another, if supported by underlying objects. Returns true on success, false if the operation doesn't appear to be supported.
+		static bool g_copy_timestamps(service_ptr_t<file> from, service_ptr_t<file> to, abort_callback& abort);
+		static bool g_copy_creation_time(service_ptr_t<file> from, service_ptr_t<file> to, abort_callback& abort);
 
 		//! Helper; improved performance over g_transfer on streams (avoids disk fragmentation when transferring large blocks).
 		static t_filesize g_transfer(service_ptr_t<file> p_src,service_ptr_t<file> p_dst,t_filesize p_bytes,abort_callback & p_abort);
@@ -423,13 +426,13 @@ namespace foobar2000_io
 
 	class file_streamstub : public file_readonly {
 	public:
-		t_size read(void * p_buffer,t_size p_bytes,abort_callback & p_abort) {return 0;}
-		t_filesize get_size(abort_callback & p_abort) {return filesize_invalid;}
-		t_filesize get_position(abort_callback & p_abort) {return 0;}
-		bool get_content_type(pfc::string_base & p_out) {return false;}
+		t_size read(void *,t_size,abort_callback &) {return 0;}
+		t_filesize get_size(abort_callback &) {return filesize_invalid;}
+		t_filesize get_position(abort_callback &) {return 0;}
+		bool get_content_type(pfc::string_base &) {return false;}
 		bool is_remote() {return true;}
 		void reopen(abort_callback&) {}
-		void seek(t_filesize p_position,abort_callback & p_abort) {throw exception_io_object_not_seekable();}
+		void seek(t_filesize,abort_callback &) {throw exception_io_object_not_seekable();}
 		bool can_seek() {return false;}
 	};
 
@@ -470,7 +473,7 @@ namespace foobar2000_io
 		//! Moves/renames a file. Will fail if the destination file already exists. \n
 		//! Note that this function may throw exception_io_denied instead of exception_io_sharing_violation when the file is momentarily in use, due to bugs in Windows MoveFile() API. There is no legitimate way for us to distinguish between the two scenarios.
 		virtual void move(const char * p_src,const char * p_dst,abort_callback & p_abort)=0;
-		//! Queries whether a file at specified path belonging to this filesystem is a remove object or not.
+		//! Queries whether a file at specified path belonging to this filesystem is a remote object or not.
 		virtual bool is_remote(const char * p_src) = 0;
 
 		//! Retrieves stats of a file at specified path.
@@ -798,6 +801,7 @@ namespace foobar2000_io
 	void substituteProtocol(pfc::string_base & out, const char * fullString, const char * protocolName);
     
     bool matchContentType_MP3( const char * fullString);
+    bool matchContentType_MP4audio( const char * fullString);
     bool matchContentType_MP4( const char * fullString);
     bool matchContentType_Ogg( const char * fullString);
     bool matchContentType_Opus( const char * fullString);
@@ -809,6 +813,22 @@ namespace foobar2000_io
 	const char * contentTypeFromExtension( const char * ext );
 
 	void purgeOldFiles(const char * directory, t_filetimestamp period, abort_callback & abort);
+
+	//! \since 1.6
+	class read_ahead_tools : public service_base {
+		FB2K_MAKE_SERVICE_COREAPI(read_ahead_tools);
+	public:
+		//! Turn any file object into asynchronous read-ahead-buffered file.
+		//! @param f File object to wrap. Do not call this object's method after a successful call to add_read_ahead; new file object takes over the ownership of it.
+		//! @param size Requested read-ahead bytes. Pass 0 to use user settings for local/remote playback.
+		virtual file::ptr add_read_ahead(file::ptr f, size_t size, abort_callback & aborter) = 0;
+
+		//! A helper method to use prior to opening decoders. \n
+		//! May open the file if needed or leave it blank for the decoder to open.
+		//! @param f File object to open if needed (buffering mandated by user settings). May be valid or null prior to call. May be valid or null (no buffering) after call.
+		//! @param path Path to open. May be null if f is not null. At least one of f and path must be valid prior to call.
+		virtual void open_file_helper(file::ptr & f, const char * path, abort_callback & aborter) = 0;
+	};
 }
 
 using namespace foobar2000_io;

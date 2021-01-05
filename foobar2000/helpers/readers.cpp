@@ -33,15 +33,17 @@ file::ptr fullFileBuffer::open(const char * path, abort_callback & abort, file::
 	file::ptr f;
 	if (hint.is_valid()) f = hint;
 	else filesystem::g_open_read(f, path, abort);
-	t_filesize fs = f->get_size(abort);
-	if (fs < sizeMax) /*rejects size-unknown too*/ {
-		try {
-			service_ptr_t<reader_bigmem_mirror> r = new service_impl_t<reader_bigmem_mirror>();
-			r->init(f, abort);
-			f = r;
-		}
-		catch (std::bad_alloc) {}
+
+	if (sizeMax != filesize_invalid) {
+		t_filesize fs = f->get_size(abort);
+		if (fs > sizeMax) return f;
 	}
+	try {
+		service_ptr_t<reader_bigmem_mirror> r = new service_impl_t<reader_bigmem_mirror>();
+		r->init(f, abort);
+		f = r;
+	}
+	catch (std::bad_alloc) {}
 	return f;
 }
 
@@ -335,6 +337,7 @@ namespace {
 
 					{
 						pfc::mutexScope guard( i.m_guard );
+						i.m_abort.check();
 						if ( i.m_seekto != filesize_invalid ) {
 							// Seek request happened while we were reading - discard and continue
 							continue; 

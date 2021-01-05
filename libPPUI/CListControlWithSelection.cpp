@@ -6,7 +6,7 @@
 #include "PaintUtils.h"
 #include "IDataObjectUtils.h"
 #include "SmartStrStr.h"
-
+#include "CListControl-Cells.h"
 
 namespace {
 	class bit_array_selection_CListControl : public pfc::bit_array {
@@ -120,12 +120,10 @@ void CListControlWithSelectionBase::OnKeyDown_SetIndexDeltaLineHelper(int p_delt
 	const int currentGroup = GetItemGroup(current);
 	if (GroupFocusActive()) {
 		if (p_delta < 0) {
-			if (currentGroup > 1) {
-				int targetGroup = currentGroup - 1;
-				t_size base, count;
-				if (ResolveGroupRange(targetGroup,base,count)) {
-					OnKeyDown_SetIndexHelper((int) (base + count - 1), p_keys);
-				}
+			int targetGroup = currentGroup - 1;
+			t_size base, count;
+			if (ResolveGroupRange(targetGroup, base, count)) {
+				OnKeyDown_SetIndexHelper((int)(base + count - 1), p_keys);
 			}
 		} else if (p_delta > 0) {
 			t_size base, count;
@@ -538,17 +536,20 @@ static HRGN FrameRectRgn(const CRect & rect) {
 void CListControlWithSelectionBase::HandleDragSel(const CPoint & p_pt) {
 	CPoint pt(p_pt); pt += GetViewOffset();
 	if (pt != m_selectDragCurrentAbs) {
+
+		if (!this->AllowRangeSelect()) {
+			// simplified
+			m_selectDragCurrentAbs = pt;
+			if (pt != m_selectDragOriginAbs) m_selectDragMoved = true;
+			return;
+		}
+
 		CRect rcOld(m_selectDragOriginAbs,m_selectDragCurrentAbs); rcOld.NormalizeRect();
 		m_selectDragCurrentAbs = pt;
 		CRect rcNew(m_selectDragOriginAbs,m_selectDragCurrentAbs); rcNew.NormalizeRect();
 
 
-		if (false) {
-			CRect total(pfc::min_t(rcOld.left,rcNew.left),pfc::min_t(rcOld.top,rcNew.top),pfc::max_t(rcOld.right,rcNew.right),pfc::max_t(rcOld.bottom,rcNew.bottom));
-			total.InflateRect(1,1);
-			total.OffsetRect( - GetViewOffset() );
-			InvalidateRect(total);
-		} else {
+		{
 			CRgn rgn = FrameRectRgn(rcNew);
 			CRgn rgn2 = FrameRectRgn(rcOld);
 			rgn.CombineRgn(rgn2,RGN_OR);
@@ -594,9 +595,7 @@ void CListControlWithSelectionBase::HandleDragSel(const CPoint & p_pt) {
 }
 
 void CListControlWithSelectionBase::InitSelectDragMode(const CPoint & p_pt,bool p_rightClick) {
-
-	if (! this->AllowRangeSelect() ) return;
-	
+	// Perform the bookkeeping even if multiple selection is disabled, detection of clicks relies on it
 	SetTimer(KSelectionTimerID,KSelectionTimerPeriod);
 	m_selectDragMode = true;
 	m_selectDragOriginAbs = m_selectDragCurrentAbs = p_pt + GetViewOffset();
@@ -624,7 +623,7 @@ LRESULT CListControlWithSelectionBase::OnCaptureChanged(UINT,WPARAM,LPARAM,BOOL&
 }
 
 void CListControlWithSelectionBase::RenderOverlay(const CRect & p_updaterect,CDCHandle p_dc)  {
-	if (m_selectDragMode) {
+	if (m_selectDragMode && this->AllowRangeSelect() ) {
 		CRect rcSelect(m_selectDragOriginAbs,m_selectDragCurrentAbs);
 		rcSelect.NormalizeRect();
 		PaintUtils::FocusRect(p_dc,rcSelect);
@@ -744,7 +743,10 @@ void CListControlWithSelectionBase::RenderItem(t_size p_item,const CRect & p_ite
 	}
 }
 void CListControlWithSelectionBase::RenderSubItemText(t_size item, t_size subItem,const CRect & subItemRect,const CRect & updateRect,CDCHandle dc, bool allowColors) {
-	if (m_drawThemeText && GetCellType( item, subItem ) == cell_text) for(;;) {
+	auto ct = GetCellType(item, subItem);
+	if ( ct == nullptr ) return;
+
+	if (m_drawThemeText && ct->AllowDrawThemeText() && !this->IsSubItemGrayed(item, subItem)) for(;;) {
 		pfc::string_formatter label;
 		if (!GetSubItemText(item,subItem,label)) return;
 		const bool weHaveFocus = ::GetFocus() == m_hWnd;

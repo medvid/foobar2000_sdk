@@ -210,7 +210,7 @@ void filesystem::g_move(const char * src,const char * dst,abort_callback & p_abo
 
 void filesystem::g_link(const char * p_src,const char * p_dst,abort_callback & p_abort) {
 	if (!foobar2000_io::_extract_native_path_ptr(p_src) || !foobar2000_io::_extract_native_path_ptr(p_dst)) throw exception_io_no_handler_for_path();
-	WIN32_IO_OP( CreateHardLink( pfc::stringcvt::string_os_from_utf8( p_dst ), pfc::stringcvt::string_os_from_utf8( p_src ), NULL) );
+	WIN32_IO_OP( CreateHardLink( pfc::stringcvt::string_os_from_utf8( pfc::winPrefixPath( p_dst ) ), pfc::stringcvt::string_os_from_utf8( pfc::winPrefixPath( p_src ) ), NULL) );
 }
 
 void filesystem::g_link_timeout(const char * p_src,const char * p_dst,double p_timeout,abort_callback & p_abort) {
@@ -616,6 +616,10 @@ void filesystem::g_copy(const char * src,const char * dst,abort_callback & p_abo
 			throw;
 		}
 	}
+
+	try {
+		file::g_copy_timestamps(r_src, r_dst, p_abort);
+	} catch (exception_io) {}
 }
 
 void stream_reader::read_object(void * p_buffer,t_size p_bytes,abort_callback & p_abort) {
@@ -784,7 +788,18 @@ namespace {
 
 	class exception_io_win32_ex : public exception_io_win32 {
 	public:
-		exception_io_win32_ex(DWORD p_code) : m_msg(PFC_string_formatter() << "I/O error (win32 #" << (t_uint32)p_code << ")") {}
+		static pfc::string8 format(DWORD code) {
+			pfc::string8 ret;
+			ret << "I/O error (win32 ";
+			if (code & 0x80000000) {
+				ret << "0x" << pfc::format_hex(code, 8);
+			} else {
+				ret << "#" << (uint32_t)code;
+			}
+			ret << ")";
+			return ret;
+		}
+		exception_io_win32_ex(DWORD p_code) : m_msg(format(p_code)) {}
 		exception_io_win32_ex(const exception_io_win32_ex & p_other) {*this = p_other;}
 		const char * what() const throw() {return m_msg;}
 	private:
@@ -860,6 +875,7 @@ PFC_NORETURN void foobar2000_io::exception_io_from_win32(DWORD p_code) {
 	case ERROR_BAD_NETPATH:
 		// known to be inflicted by momentary net connectivity issues - NOT the same as exception_io_not_found
 		throw exception_io("Network path not found");
+#if FB2K_SUPPORT_TRANSACTED_FILESYSTEM
 	case ERROR_TRANSACTIONAL_OPEN_NOT_ALLOWED:
 	case ERROR_TRANSACTIONS_UNSUPPORTED_REMOTE:
 	case ERROR_RM_NOT_ACTIVE:
@@ -870,11 +886,16 @@ PFC_NORETURN void foobar2000_io::exception_io_from_win32(DWORD p_code) {
 		throw exception_io_transactional_conflict();
 	case ERROR_TRANSACTION_ALREADY_ABORTED:
 		throw exception_io_transaction_aborted();
-	case ERROR_UNEXP_NET_ERR:
-		// QNAP threw this when messing with very long file paths and concurrent conversion, probably SMB daemon crashed
-		throw exception_io("Unexpected netwrok error");
 	case ERROR_EFS_NOT_ALLOWED_IN_TRANSACTION:
 		throw exception_io("Transacted updates of encrypted content are not supported");
+#endif // FB2K_SUPPORT_TRANSACTED_FILESYSTEM
+	case ERROR_UNEXP_NET_ERR:
+		// QNAP threw this when messing with very long file paths and concurrent conversion, probably SMB daemon crashed
+		throw exception_io("Unexpected network error");
+	case ERROR_NOT_SAME_DEVICE:
+		throw exception_io("Source and destination must be on the same device");
+	case 0x80310000:
+		throw exception_io("Drive locked by BitLocker");
 	default:
 		throw exception_io_win32_ex(p_code);
 	}
@@ -1133,7 +1154,8 @@ bool foobar2000_io::matchContentType(const char * fullString, const char * ourTy
 const char * foobar2000_io::contentTypeFromExtension( const char * ext ) {
     if ( pfc::stringEqualsI_ascii( ext, "mp3" ) ) return "audio/mpeg";
     if ( pfc::stringEqualsI_ascii( ext, "flac" ) ) return "audio/flac";
-    if ( pfc::stringEqualsI_ascii( ext, "mp4" ) || pfc::stringEqualsI_ascii( ext, "m4a" ) ) return "audio/mp4";
+    if ( pfc::stringEqualsI_ascii( ext, "mp4" ) ) return "application/mp4"; // We don't know if it's audio-only or other.
+    if ( pfc::stringEqualsI_ascii( ext, "m4a" ) ) return "audio/mp4";
     if ( pfc::stringEqualsI_ascii( ext, "mpc" ) ) return "audio/musepack";
     if ( pfc::stringEqualsI_ascii( ext, "ogg" ) ) return "audio/ogg";
     if ( pfc::stringEqualsI_ascii( ext, "opus" ) ) return "audio/opus";
@@ -1146,6 +1168,7 @@ const char * foobar2000_io::contentTypeFromExtension( const char * ext ) {
 const char * foobar2000_io::extensionFromContentType( const char * contentType ) {
     if (matchContentType_MP3( contentType )) return "mp3";
     if (matchContentType_FLAC( contentType )) return "flac";
+    if (matchContentType_MP4audio( contentType)) return "m4a";
     if (matchContentType_MP4( contentType)) return "mp4";
     if (matchContentType_Musepack( contentType )) return "mpc";
     if (matchContentType_Ogg( contentType )) return "ogg";
@@ -1161,6 +1184,12 @@ bool foobar2000_io::matchContentType_MP3( const char * type) {
     return matchContentType(type,"audio/mp3") || matchContentType(type,"audio/mpeg") || matchContentType(type,"audio/mpg") || matchContentType(type,"audio/x-mp3") || matchContentType(type,"audio/x-mpeg") || matchContentType(type,"audio/x-mpg");
 }
 bool foobar2000_io::matchContentType_MP4( const char * type ) {
+    return matchContentType(type, "audio/mp4") || matchContentType(type, "audio/x-mp4")
+    || matchContentType(type, "video/mp4") ||  matchContentType(type, "video/x-mp4")
+    || matchContentType(type, "application/mp4") ||  matchContentType(type, "application/x-mp4");
+    
+}
+bool foobar2000_io::matchContentType_MP4audio( const char * type ) {
     return matchContentType(type, "audio/mp4") || matchContentType(type, "audio/x-mp4");
 }
 bool foobar2000_io::matchContentType_Ogg( const char * type) {
@@ -1517,4 +1546,39 @@ bool file_lowLevelIO::getFileTimes(filetimes_t & out, abort_callback & a) {
 
 bool file_lowLevelIO::setFileTimes(filetimes_t const & in, abort_callback & a) {
 	return this->lowLevelIO(guid_setFileTimes, 0, (void*)&in, sizeof(in), a) != 0;
+}
+
+bool file::g_copy_creation_time(service_ptr_t<file> from, service_ptr_t<file> to, abort_callback& a) {
+	file_lowLevelIO::ptr llFrom, llTo;
+	bool rv = false;
+	if (llTo &= to) {
+		if (llFrom &= from) {
+			file_lowLevelIO::filetimes_t filetimes;
+			if (llFrom->getFileTimes(filetimes, a)) {
+				if (filetimes.creation != filetimestamp_invalid) {
+					file_lowLevelIO::filetimes_t ft2;
+					ft2.creation = filetimes.creation;
+					rv = llTo->setFileTimes(ft2, a);
+				}
+			}
+		}
+	}
+	return rv;
+}
+bool file::g_copy_timestamps(file::ptr from, file::ptr to, abort_callback& a) {
+	file_lowLevelIO::ptr llFrom, llTo;
+	if ( llTo &= to ) {
+		if (llFrom &= from) {
+			file_lowLevelIO::filetimes_t filetimes = {};
+			if (llFrom->getFileTimes(filetimes, a)) {
+				return llTo->setFileTimes(filetimes, a);
+			}
+		}
+		file_lowLevelIO::filetimes_t filetimes = {};
+		filetimes.lastWrite = from->get_timestamp(a);
+		if ( filetimes.lastWrite != filetimestamp_invalid ) {
+			return llTo->setFileTimes(filetimes, a);
+		}
+	}
+	return false;
 }

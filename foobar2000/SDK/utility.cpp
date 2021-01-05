@@ -40,3 +40,38 @@ namespace pfc {
 		uBugCheck();
 	}
 }
+
+
+// file_lock_manager.h functionality
+#include "file_lock_manager.h"
+namespace {
+    class file_lock_interrupt_impl : public file_lock_interrupt {
+    public:
+        void interrupt( abort_callback & a ) { f(a); }
+        std::function<void (abort_callback&)> f;
+    };
+}
+
+file_lock_interrupt::ptr file_lock_interrupt::create( std::function< void (abort_callback&)> f ) {
+    service_ptr_t<file_lock_interrupt_impl> i = new service_impl_t<file_lock_interrupt_impl>();
+    i->f = f;
+    return i;
+}
+
+// file_info_filter.h functionality
+#include "file_info_filter.h"
+namespace {
+    class file_info_filter_lambda : public file_info_filter {
+    public:
+        bool apply_filter(trackRef p_track,t_filestats p_stats,file_info & p_info) override {
+            return f(p_track, p_stats, p_info);
+        }
+        func_t f;
+    };
+}
+
+file_info_filter::ptr file_info_filter::create(func_t f) {
+    auto o = fb2k::service_new<file_info_filter_lambda>();
+    o->f = f;
+    return o;
+}
